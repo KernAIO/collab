@@ -1,11 +1,13 @@
 import { defineConfig } from 'vitest/config'
+
 export default defineConfig({
   test: {
-    // services carry no unit tests yet; the suites land with the features they cover
-    passWithNoTests: true,
-    include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
-    fileParallelism: false,
+    include: ['src/**/*.test.ts'],
+    // Each suite migrates a scratch database and drives real WebSocket clients.
+    testTimeout: 30_000,
+    hookTimeout: 120_000,
+    maxWorkers: 2,
+    minWorkers: 1,
+    env: { NODE_ENV: 'test', LOG_LEVEL: process.env.LOG_LEVEL ?? 'silent' },
   },
 })

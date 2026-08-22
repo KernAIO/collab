@@ -55,3 +55,7 @@ edits and stores the result.
 - Merged state is written after edits settle (2s debounce, 15s ceiling). A plain-text snapshot is
   published periodically as `collab.document.updated` so modules can index prose without decoding the
   CRDT.
+- `WebSocketPolyfill` belongs to `HocuspocusProviderWebsocket`, not `HocuspocusProvider`. Passing it to
+  the provider is ignored (and rejected by the types); handing the provider a pre-built socket makes it
+  stop managing the connection, so it never connects. Set the global `WebSocket` instead — that is what
+  `src/testing/harness.ts` does.
