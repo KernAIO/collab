@@ -6,8 +6,8 @@
  * page: it checks workspace membership and then asks the owning module through
  * `<module>.collab.access`, so permissions stay with the module that owns the data.
  */
-import type { Principal } from '@kernaio/contracts'
-import type { Kernel } from '@kernaio/kernel'
+import type { Principal } from '@kernhq/contracts'
+import type { Kernel } from '@kernhq/kernel'
 import { sql } from 'drizzle-orm'
 
 export interface DocumentName {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Server } from '@hocuspocus/server'
-import { createKernel, type Kernel } from '@kernaio/kernel'
+import { createKernel, type Kernel } from '@kernhq/kernel'
 import * as Y from 'yjs'
 import { ensureStorage, loadDocument, parseDocumentName, resolveAccess, storeDocument } from './documents.js'
 import { type CollabEnv, loadCollabEnv } from './env.js'
