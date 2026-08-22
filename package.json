@@ -1,5 +1,5 @@
 {
-  "name": "@kernalo/collab-service",
+  "name": "@kernaio/collab-service",
   "version": "0.1.0",
   "private": true,
   "description": "Kern collab service: Hocuspocus (Yjs) server for collaborative editing, persisted to Postgres, access via core",
@@ -20,8 +20,8 @@
   },
   "dependencies": {
     "@hocuspocus/server": "^4.6.0",
-    "@kernalo/contracts": "^0.1.0",
-    "@kernalo/kernel": "^0.1.0",
+    "@kernaio/contracts": "^0.1.0",
+    "@kernaio/kernel": "^0.1.0",
     "dotenv": "^17.4.0",
     "pg": "^8.16.0",
     "y-protocols": "^1.0.6",

@@ -1,5 +1,5 @@
-import { ANONYMOUS, type Principal } from '@kernalo/contracts'
-import type { Kernel } from '@kernalo/kernel'
+import { ANONYMOUS, type Principal } from '@kernaio/contracts'
+import type { Kernel } from '@kernaio/kernel'
 
 /**
  * Resolves principals for a service that does not own the identity tables: the session token is handed

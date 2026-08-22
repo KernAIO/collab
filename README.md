@@ -1,7 +1,7 @@
 # Kern collab service
 
 Real-time collaborative editing for Kern documents, built on [Hocuspocus](https://tiptap.dev/hocuspocus)
-and Yjs. Part of [Kern](https://github.com/KernALO/kern).
+and Yjs. Part of [Kern](https://github.com/KernAIO/kern).
 
 This service owns no domain data. It authenticates the editor against core, asks the module that owns
 the object whether the user may read or write, merges everyone's edits, and stores the result so a
