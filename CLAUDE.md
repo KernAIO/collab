@@ -28,3 +28,30 @@ The repositories are **public**, so every commit is visible the moment it is pus
 - `pnpm typecheck && pnpm lint && pnpm test && pnpm build` must pass before pushing.
 - UI follows `app/DESIGN.md` (Ink/paper design system) and must work in RTL (fa/ar) and dark mode.
 - All user-facing strings go through i18n (Paraglide) — no hardcoded English in components.
+
+## Keeping this file current
+This file is how the next person — or the next agent — avoids repeating what we already worked out.
+When you learn something durable, add it here **in the same commit as the change that taught you**:
+- a trap that cost you time (a silent failure, a misleading error, a tool that lies about success)
+- a convention you had to infer from reading several files
+- a decision and the reason behind it, especially where the obvious choice is wrong
+Keep it specific and short. Delete anything that stops being true — a stale note is worse than none.
+
+---
+
+# This repository: collab (real-time documents)
+
+A Hocuspocus/Yjs server on **:4300**, path `/collab`. It owns no domain data: it authenticates the
+editor against core, asks the module that owns the object whether they may read or write, merges the
+edits and stores the result.
+
+**Things worth knowing**
+- Document names are `ws:<workspaceId>:<module>:<type>:<id>`. The name is what tells the service which
+  workspace to check and which module to consult.
+- A module grants access by exposing a `collab.access` procedure. A module that does not answer falls
+  back to workspace membership, which keeps documents usable while that module is still being built.
+- Hocuspocus 4 is `new Server(config)` — not `Server.configure()` — and it owns its own HTTP server, so
+  health and metrics are served from the `onRequest` hook, where **rejecting** means "already handled".
+- Merged state is written after edits settle (2s debounce, 15s ceiling). A plain-text snapshot is
+  published periodically as `collab.document.updated` so modules can index prose without decoding the
+  CRDT.
