@@ -66,3 +66,5 @@ workspace membership, which keeps documents usable while that module is still be
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md). Licence: [AGPL-3.0](LICENSE).
+
+Website: [kernaio.com](https://kernaio.com).
