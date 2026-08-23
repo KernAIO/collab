@@ -7,8 +7,6 @@ import { type CollabEnv, loadCollabEnv } from './env.js'
 import { createPrincipals, type Principals } from './principal.js'
 import { extractText } from './text.js'
 
-export const COLLAB_VERSION = '0.1.0'
-
 export interface CollabServiceOptions {
   env?: Record<string, string | undefined>
 }
@@ -35,7 +33,6 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
   const env = loadCollabEnv(opts.env ?? {})
   const kernel = await createKernel({
     service: 'collab',
-    version: COLLAB_VERSION,
     modules: [],
     role: 'api',
     env: { PORT: process.env.PORT ?? '4300', ...opts.env },
@@ -125,7 +122,8 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
       const body = JSON.stringify({
         ok: true,
         service: 'collab',
-        version: COLLAB_VERSION,
+        version: kernel.version,
+        modules: kernel.registry.all().map((m) => ({ id: m.definition.id, version: m.definition.version })),
         documents: instance.getDocumentsCount(),
         connections: instance.getConnectionsCount(),
       })
