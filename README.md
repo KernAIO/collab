@@ -2,6 +2,12 @@
 
 **Documents that several people edit at the same time.**
 
+[![CI](https://img.shields.io/github/actions/workflow/status/KernAIO/collab/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KernAIO/collab/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square)](https://github.com/KernAIO/kern#what-works-today)
+[![Last commit](https://img.shields.io/github/last-commit/KernAIO/collab?style=flat-square)](https://github.com/KernAIO/collab/commits/main)
+[![Website](https://img.shields.io/badge/kernaio.com-1f2328?style=flat-square)](https://kernaio.com)
+
 Two people typing in the same paragraph should both keep their words. This service is what makes
 that true in [Kern](https://github.com/KernAIO/kern): it merges everyone's edits, keeps the result,
 and hands it to whoever opens the document next.
@@ -67,4 +73,7 @@ workspace membership, which keeps documents usable while that module is still be
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md). Licence: [AGPL-3.0](LICENSE).
 
-Website: [kernaio.com](https://kernaio.com).
+---
+
+**Kern** — one place for your team's work: issues, conversations, documents and people.
+Open source, self-hosted. [kernaio.com](https://kernaio.com) · [github.com/KernAIO](https://github.com/KernAIO)
