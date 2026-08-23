@@ -20,8 +20,8 @@
   },
   "dependencies": {
     "@hocuspocus/server": "^4.6.0",
-    "@kernhq/contracts": "^0.1.0",
-    "@kernhq/kernel": "^0.1.0",
+    "@kernhq/contracts": "^0.2.0",
+    "@kernhq/kernel": "^0.2.0",
     "dotenv": "^17.4.0",
     "pg": "^8.16.0",
     "y-protocols": "^1.0.6",
