@@ -93,6 +93,54 @@ export function createProcedures(kernel: Kernel, server: Server): Record<string,
       },
     },
 
+    'document.replace': {
+      ...collabProcedures['document.replace'],
+      handler: async (input: { name: string; state: string }, { principal }) => {
+        requireService(principal)
+        requireName(input.name)
+        const source = new Y.Doc()
+        Y.applyUpdate(source, new Uint8Array(Buffer.from(input.state, 'base64')))
+
+        const connection = await server.hocuspocus.openDirectConnection(input.name)
+        try {
+          await connection.transact((live) => {
+            /**
+             * Replace each top-level shared type rather than applying an update over the top.
+             * `Y.applyUpdate` merges, so feeding an old version back would produce the union of old
+             * and new — every deleted paragraph coming back alongside the ones that replaced it.
+             *
+             * Only the shapes an editor actually uses are handled. Anything else would be replaced
+             * wrongly and silently, which is worse than refusing.
+             */
+            for (const key of source.share.keys()) {
+              /**
+               * Detect map-like content structurally.
+               *
+               * Neither obvious check works. A shared type that arrived through `applyUpdate` is an
+               * untyped placeholder, so `Doc.get(key, Y.XmlFragment)` *converts* it rather than
+               * throwing, and `instanceof` is false for everything. Its fields do not lie, though:
+               * keyed content lives in `_map` and sequence content in `_start`.
+               */
+              const raw = source.share.get(key) as { _map?: Map<string, unknown> } | undefined
+              if (raw?._map && raw._map.size > 0) {
+                throw KernError.badRequest(
+                  `Cannot replace shared type "${key}": only XML fragments are supported`,
+                )
+              }
+              const from = source.get(key, Y.XmlFragment) as Y.XmlFragment
+              const to = live.get(key, Y.XmlFragment) as Y.XmlFragment
+              to.delete(0, to.length)
+              to.insert(0, from.toArray().map((n) => (typeof n === 'string' ? n : n.clone())) as never[])
+            }
+          })
+          const doc = server.hocuspocus.documents.get(input.name)
+          return { ok: true as const, size: doc ? Y.encodeStateAsUpdate(doc).byteLength : 0 }
+        } finally {
+          await connection.disconnect()
+        }
+      },
+    },
+
     'document.snapshot': {
       ...collabProcedures['document.snapshot'],
       handler: async (input: { name: string }, { principal }) => {

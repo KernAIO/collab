@@ -121,6 +121,87 @@ describe('document.apply', () => {
   })
 })
 
+describe('document.replace', () => {
+  /** A page's prose is an XML fragment, which is what Tiptap binds to. */
+  const fragmentDoc = (paragraphs: string[]) => {
+    const d = new Y.Doc()
+    const frag = d.getXmlFragment('default')
+    for (const p of paragraphs) {
+      const el = new Y.XmlElement('paragraph')
+      el.insert(0, [new Y.XmlText(p)])
+      frag.push([el])
+    }
+    return d
+  }
+  const textOfFragment = (state: string) => {
+    const d = new Y.Doc()
+    Y.applyUpdate(d, new Uint8Array(Buffer.from(state, 'base64')))
+    return d.getXmlFragment('default').toJSON()
+  }
+
+  it('replaces the content instead of merging it', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    const original = fragmentDoc(['the original paragraph'])
+    await call('document.apply', {
+      name,
+      update: Buffer.from(Y.encodeStateAsUpdate(original)).toString('base64'),
+    })
+
+    // Then the page is rewritten, as somebody editing would.
+    const rewritten = fragmentDoc(['a completely different paragraph'])
+    await call('document.replace', {
+      name,
+      state: Buffer.from(Y.encodeStateAsUpdate(rewritten)).toString('base64'),
+    })
+
+    const after = await call<State>('document.state', { name })
+    const html = textOfFragment(after.state!)
+    expect(html).toContain('a completely different paragraph')
+    expect(
+      html,
+      'the old paragraph came back — this is apply, not replace, and restoring a version would union the two',
+    ).not.toContain('the original paragraph')
+  })
+
+  it('reaches the people currently editing', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    const client = collab.connect(name, collab.user('Author'))
+    await client.synced
+    const frag = client.doc.getXmlFragment('default')
+    const el = new Y.XmlElement('paragraph')
+    el.insert(0, [new Y.XmlText('draft')])
+    frag.push([el])
+
+    await waitFor(async () => {
+      const r = await call<State>('document.state', { name })
+      return r.state && textOfFragment(r.state).includes('draft') ? r : null
+    }, 'the draft to reach the server')
+
+    const restored = fragmentDoc(['the published version'])
+    await call('document.replace', {
+      name,
+      state: Buffer.from(Y.encodeStateAsUpdate(restored)).toString('base64'),
+    })
+
+    await waitFor(
+      () => frag.toJSON().includes('the published version') && !frag.toJSON().includes('draft'),
+      'the open client to see the replacement',
+    )
+  })
+
+  it('refuses a shared type it would replace wrongly', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    const odd = new Y.Doc()
+    odd.getMap('settings').set('theme', 'dark')
+    await expect(
+      call('document.replace', {
+        name,
+        state: Buffer.from(Y.encodeStateAsUpdate(odd)).toString('base64'),
+      }),
+    ).rejects.toThrow()
+  })
+})
+
 describe('document.snapshot', () => {
   it('returns a snapshot and the state it was taken from', async () => {
     const name = collab.documentName({ module: 'quire' })
