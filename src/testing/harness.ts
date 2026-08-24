@@ -21,9 +21,23 @@ import * as Y from 'yjs'
 import { formatDocumentName } from '../documents.js'
 import { type CollabService, createCollabService } from '../service.js'
 
-// Hocuspocus' provider picks up the global WebSocket; give it the `ws` implementation once rather
-// than passing a polyfill per provider (that option belongs to the socket, not the provider, config).
-globalThis.WebSocket = WebSocket as unknown as typeof globalThis.WebSocket
+/**
+ * Hocuspocus' provider picks up the global WebSocket; give it the `ws` implementation once rather
+ * than passing a polyfill per provider (that option belongs to the socket, not the provider, config).
+ *
+ * The subclass exists so a test can put a cookie on the upgrade request, which is the only way a
+ * browser authenticates: `ws` takes headers in its constructor options, and a browser sets them for
+ * you. `nextCookie` is read at construction, so connections made through `connectWithCookie` are
+ * sequential by design — a reconnect picks up whatever is current, which is fine for a test and
+ * would not be for anything else.
+ */
+let nextCookie: string | null = null
+class KernTestSocket extends WebSocket {
+  constructor(address: string | URL, protocols?: string | string[], options?: Record<string, unknown>) {
+    super(address, protocols, nextCookie ? { ...options, headers: { cookie: nextCookie } } : options)
+  }
+}
+globalThis.WebSocket = KernTestSocket as unknown as typeof globalThis.WebSocket
 
 const here = dirname(fileURLToPath(import.meta.url))
 loadDotenv({ path: resolve(here, '../../.env'), quiet: true })
@@ -62,6 +76,12 @@ export interface TestCollab {
   outsider(name: string): TestUser
   documentName(opts?: { module?: string; type?: string; objectId?: string; workspaceId?: string }): string
   connect(documentName: string, user: TestUser | null): TestClient
+  /**
+   * Connect the way a browser does: no token, and the session cookie attached to the upgrade
+   * request. A page cannot read an HttpOnly cookie to hand to the provider, so this is the only path
+   * a first-party client has.
+   */
+  connectWithCookie(documentName: string, cookie: string): TestClient
   /** register (or replace) a module's `collab.access` answer */
   setAccess(
     module: string,
@@ -196,6 +216,36 @@ export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCo
         name: documentName,
         document: doc,
         token: user?.token ?? '',
+        onSynced: () => resolveSynced(),
+        onAuthenticationFailed: ({ reason }) => rejectSynced(new Error(`authentication failed: ${reason}`)),
+      })
+      const client: TestClient = {
+        doc,
+        provider,
+        text: doc.getText('content'),
+        synced,
+        destroy() {
+          provider.destroy()
+          doc.destroy()
+        },
+      }
+      clients.push(client)
+      return client
+    },
+    connectWithCookie(documentName, cookie) {
+      nextCookie = cookie
+      const doc = new Y.Doc()
+      let resolveSynced!: () => void
+      let rejectSynced!: (err: Error) => void
+      const synced = new Promise<void>((res, rej) => {
+        resolveSynced = res
+        rejectSynced = rej
+      })
+      const provider = new HocuspocusProvider({
+        url,
+        name: documentName,
+        document: doc,
+        token: '',
         onSynced: () => resolveSynced(),
         onAuthenticationFailed: ({ reason }) => rejectSynced(new Error(`authentication failed: ${reason}`)),
       })

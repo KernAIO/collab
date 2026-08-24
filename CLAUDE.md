@@ -111,6 +111,18 @@ edits and stores the result.
   server side — version history, export, restore, import. Yjs state is binary and the broker speaks
   JSON, so it crosses base64-encoded. `document.apply` goes through `openDirectConnection` so the
   update reaches whoever is editing rather than being overwritten by their next keystroke.
+- **A browser authenticates with the session cookie, not a token.** The cookie is HttpOnly, so the
+  page cannot read it to hand to `HocuspocusProvider`; it is attached to the upgrade request, and
+  `onAuthenticate` reads it from `requestHeaders`. Bearer token first, cookie second — the same order
+  and the same parsing as the chat gateway, deliberately, so the two agree about what a session is.
+  Until this existed no browser could open a document at all.
+- **`kernel.call` resolving `null` is not the same as rejecting.** `.catch` does not cover it, and
+  `core.users.principal` answering "no such session" with `null` used to reach `principal.kind` and
+  take down the handshake with a TypeError instead of refusing the connection.
+- **To put a cookie on a test upgrade, subclass the global `WebSocket`.** Passing
+  `HocuspocusProviderWebsocket` with a `WebSocketPolyfill` to the provider instead looks right, and
+  the connection then never establishes — `src/testing/harness.ts` sets the global once and
+  `connectWithCookie` varies the header through it.
 - Hocuspocus 4 is `new Server(config)` — not `Server.configure()` — and it owns its own HTTP server, so
   health and metrics are served from the `onRequest` hook, where **rejecting** means "already handled".
 - Merged state is written after edits settle (2s debounce, 15s ceiling). A plain-text snapshot is

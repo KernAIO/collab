@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Server } from '@hocuspocus/server'
-import { collabEvents } from '@kernhq/contracts'
+import { ANONYMOUS, collabEvents } from '@kernhq/contracts'
 import { createKernel, type Kernel } from '@kernhq/kernel'
 import * as Y from 'yjs'
 import { loadDocument, parseDocumentName, resolveAccess, SCHEMA, storeDocument } from './documents.js'
@@ -58,10 +58,18 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
     stopOnSignals: false, // main.ts owns shutdown so the kernel closes too
     websocketOptions: { maxPayload: env.COLLAB_MAX_DOCUMENT_BYTES },
 
-    async onAuthenticate({ documentName, token, connectionConfig }) {
+    async onAuthenticate({ documentName, token, connectionConfig, requestHeaders }) {
       const doc = parseDocumentName(documentName)
       if (!doc) throw new Error('Malformed document name')
-      const principal = await principals.fromToken(token)
+      // A browser cannot present a token — the session cookie is HttpOnly, so the page cannot read
+      // it to hand to the provider — but the cookie is attached to the upgrade request. API clients
+      // and native apps send a bearer token instead. Same order as the chat gateway.
+      const cookie = requestHeaders.get('cookie')
+      const principal = token
+        ? await principals.fromToken(token)
+        : cookie
+          ? await principals.fromCookie(cookie)
+          : ANONYMOUS
       const access = await resolveAccess(kernel, principal, doc)
       if (!access.canRead) throw new Error('Not authorised for this document')
       // Read-only participants still see live edits and presence, they just cannot change anything.
