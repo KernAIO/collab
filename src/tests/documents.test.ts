@@ -2,13 +2,13 @@
  * Document naming and the access decision — the two pure-ish pieces of the collab service that decide
  * which object a socket is asking for and whether it may have it.
  */
-import { ANONYMOUS, type MembershipSummary, type Principal } from '@kernhq/contracts'
+import { ANONYMOUS, type MembershipSummary, type Principal, WorkspaceId } from '@kernhq/contracts'
 import { describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
 import { formatDocumentName, parseDocumentName } from '../documents.js'
 import { extractText } from '../text.js'
 
-const WS = '01920000-0000-7000-8000-000000000001'
+const WS = WorkspaceId.parse('01920000-0000-7000-8000-000000000001')
 const OBJ = '01920000-0000-7000-8000-000000000002'
 
 describe('document names', () => {

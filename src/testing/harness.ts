@@ -10,11 +10,12 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HocuspocusProvider } from '@hocuspocus/provider'
-import { ANONYMOUS, type MembershipSummary, type Principal } from '@kernhq/contracts'
+import { ANONYMOUS, type MembershipSummary, type Principal, WorkspaceId } from '@kernhq/contracts'
 import type { Kernel } from '@kernhq/kernel'
 import { uuidv7 } from '@kernhq/kernel'
 import { createScratchDatabase } from '@kernhq/testing'
 import { config as loadDotenv } from 'dotenv'
+import pg from 'pg'
 import WebSocket from 'ws'
 import * as Y from 'yjs'
 import { formatDocumentName } from '../documents.js'
@@ -71,6 +72,13 @@ export interface TestCollab {
       userId: string
     }) => { canRead: boolean; canWrite: boolean } | Promise<{ canRead: boolean; canWrite: boolean }>,
   ): void
+  /**
+   * A pool connected as a role that can neither bypass RLS nor act as the table owner. The dev and
+   * CI database roles are superusers, so a policy is invisible to every other test in this suite —
+   * they would pass identically with no policy at all. Anything asserting isolation has to go
+   * through here.
+   */
+  restrictedPool(): Promise<pg.Pool>
   stop(): Promise<void>
 }
 
@@ -83,6 +91,8 @@ export interface StartCollabOptions {
 export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCollab> {
   const scratch = await createScratchDatabase(BASE_DATABASE_URL, `kern_test_collab_${unique()}`)
   const workspaceId = uuidv7()
+  const restricted: pg.Pool[] = []
+  let restrictedRole: string | null = null
   const service = await createCollabService({
     env: {
       NODE_ENV: 'test',
@@ -157,7 +167,7 @@ export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCo
     },
     documentName(o = {}) {
       return formatDocumentName({
-        workspaceId: o.workspaceId ?? workspaceId,
+        workspaceId: WorkspaceId.parse(o.workspaceId ?? workspaceId),
         module: o.module ?? 'docs',
         type: o.type ?? 'page',
         objectId: o.objectId ?? uuidv7(),
@@ -202,7 +212,27 @@ export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCo
       clients.push(client)
       return client
     },
+    async restrictedPool() {
+      if (!restrictedRole) {
+        restrictedRole = `kern_rls_${unique()}`
+        const admin = new pg.Client({ connectionString: scratch.url })
+        await admin.connect()
+        await admin.query(`create role "${restrictedRole}" login password 'rls' nosuperuser nobypassrls`)
+        await admin.query(`grant usage on schema kern_collab to "${restrictedRole}"`)
+        await admin.query(
+          `grant select, insert, update, delete on all tables in schema kern_collab to "${restrictedRole}"`,
+        )
+        await admin.end()
+      }
+      const url = new URL(scratch.url)
+      url.username = restrictedRole
+      url.password = 'rls'
+      const pool = new pg.Pool({ connectionString: url.toString(), max: 2 })
+      restricted.push(pool)
+      return pool
+    },
     async stop() {
+      for (const pool of restricted) await pool.end().catch(() => {})
       for (const c of clients) {
         try {
           c.destroy()
@@ -212,6 +242,12 @@ export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCo
       }
       await service.stop()
       await scratch.drop()
+      if (restrictedRole) {
+        const admin = new pg.Client({ connectionString: BASE_DATABASE_URL })
+        await admin.connect()
+        await admin.query(`drop role if exists "${restrictedRole}"`).catch(() => {})
+        await admin.end()
+      }
     },
   }
 }

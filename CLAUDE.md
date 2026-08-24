@@ -85,6 +85,24 @@ edits and stores the result.
   workspace to check and which module to consult.
 - A module grants access by exposing a `collab.access` procedure. A module that does not answer falls
   back to workspace membership, which keeps documents usable while that module is still being built.
+- **The fallback is why a broken `collab.access` looks like a working one.** Its shapes live in
+  `@kernhq/contracts` (`CollabAccessInput`, `CollabAccess`) precisely because the first module to
+  implement it declared different ones: Zod rejected every call, the broker threw, and this service
+  quietly granted plain membership instead. A test that registers the procedure without those schemas
+  proves nothing — `src/tests/contract.test.ts` registers it the way a module does.
+- **The database roles here are superusers, so RLS is invisible to an ordinary test.** A policy and no
+  policy pass identically. Anything asserting isolation goes through `harness.restrictedPool()`, which
+  connects as a `nosuperuser nobypassrls` role; `src/tests/isolation.test.ts` asserts that first.
+- `kern_collab.documents` is migrated, not created on boot, and the runtime image has to **copy
+  `migrations/`** — the folder is resolved relative to `dist/`, so an image without it starts and then
+  dies on its first query.
+- A timestamptz read through `db.execute` comes back as a *string* in Postgres' own format
+  (`2026-08-24 13:06:20.12+00`), not a `Date` and not ISO 8601. It fails the contract's `Timestamp` on
+  the way out of a procedure; normalise through `new Date(...)`.
+- `collab.document.{state,apply,snapshot,delete,presence}` is how a module reaches a document from the
+  server side — version history, export, restore, import. Yjs state is binary and the broker speaks
+  JSON, so it crosses base64-encoded. `document.apply` goes through `openDirectConnection` so the
+  update reaches whoever is editing rather than being overwritten by their next keystroke.
 - Hocuspocus 4 is `new Server(config)` — not `Server.configure()` — and it owns its own HTTP server, so
   health and metrics are served from the `onRequest` hook, where **rejecting** means "already handled".
 - Merged state is written after edits settle (2s debounce, 15s ceiling). A plain-text snapshot is

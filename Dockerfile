@@ -30,6 +30,9 @@ ENV NODE_ENV=production KERN_VERSION=${KERN_VERSION}
 RUN useradd --system --uid 10001 --create-home kern
 COPY --from=build --chown=kern:kern /app/node_modules ./node_modules
 COPY --from=build --chown=kern:kern /app/dist ./dist
+# The service migrates `kern_collab` on boot and resolves the folder relative to `dist/`, so an image
+# without it starts and then dies on its first query.
+COPY --from=build --chown=kern:kern /app/migrations ./migrations
 COPY --from=build --chown=kern:kern /app/package.json ./package.json
 
 USER kern

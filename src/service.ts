@@ -1,11 +1,16 @@
-import { randomUUID } from 'node:crypto'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Server } from '@hocuspocus/server'
+import { collabEvents } from '@kernhq/contracts'
 import { createKernel, type Kernel } from '@kernhq/kernel'
 import * as Y from 'yjs'
-import { ensureStorage, loadDocument, parseDocumentName, resolveAccess, storeDocument } from './documents.js'
+import { loadDocument, parseDocumentName, resolveAccess, SCHEMA, storeDocument } from './documents.js'
 import { type CollabEnv, loadCollabEnv } from './env.js'
 import { createPrincipals, type Principals } from './principal.js'
+import { createProcedures } from './procedures.js'
 import { extractText } from './text.js'
+
+const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), '../migrations')
 
 export interface CollabServiceOptions {
   env?: Record<string, string | undefined>
@@ -38,7 +43,7 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
     env: { PORT: process.env.PORT ?? '4300', ...opts.env },
   })
   await kernel.start()
-  await ensureStorage(kernel)
+  await kernel.database.migrateSchema(SCHEMA, MIGRATIONS)
 
   const principals = createPrincipals(kernel)
   const lastSnapshot = new Map<string, number>()
@@ -64,6 +69,21 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
       return { userId: principal.userId, name: principal.name, workspaceId: doc.workspaceId }
     },
 
+    /**
+     * A read-only participant sees live edits and belongs in the presence list, but a caret says
+     * "somebody is typing here" and theirs never will be. Dropping the cursor fields rather than the
+     * whole state keeps them visible as a reader — the client cannot be trusted to do this, because
+     * read-only is decided here and the browser only learns it as a hint.
+     */
+    async beforeHandleAwareness({ connection, states }) {
+      if (!connection?.readOnly) return
+      for (const [clientId, state] of states) {
+        if (!state) continue
+        const { cursor: _cursor, selection: _selection, ...rest } = state
+        states.set(clientId, { ...rest, readOnly: true })
+      }
+    },
+
     async onLoadDocument({ documentName, document }) {
       const state = await loadDocument(kernel, documentName)
       if (state) Y.applyUpdate(document, state)
@@ -87,23 +107,20 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
       const now = Date.now()
       if (doc && now - (lastSnapshot.get(documentName) ?? 0) > env.COLLAB_SNAPSHOT_INTERVAL_MS) {
         lastSnapshot.set(documentName, now)
-        await kernel.events
-          .publishRaw({
-            id: randomUUID(),
-            name: 'collab.document.updated',
-            version: 1,
-            module: 'collab',
-            workspaceId: doc.workspaceId as never,
-            actorId: null,
-            occurredAt: new Date().toISOString(),
-            payload: {
+        await kernel
+          .emit(
+            collabEvents.documentUpdated,
+            {
+              name: documentName,
               workspaceId: doc.workspaceId,
               module: doc.module,
               type: doc.type,
               objectId: doc.objectId,
               text: extractText(document),
+              updatedAt: new Date().toISOString(),
             },
-          })
+            { workspaceId: doc.workspaceId },
+          )
           .catch((err) => kernel.log.warn({ err }, 'failed to publish document snapshot'))
       }
     },
@@ -132,6 +149,11 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
       return Promise.reject()
     },
   })
+
+  // Registered after the server exists, because every one of them acts on a live document.
+  // `register` also subscribes `kern.rpc.collab.document.*` when NATS is configured, which is how
+  // core — where the modules that own these documents are hosted — reaches them.
+  kernel.broker.register('collab', createProcedures(kernel, server))
 
   return {
     kernel,
