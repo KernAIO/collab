@@ -12,10 +12,16 @@
  * are for, and it is why the control at the bottom exists.
  */
 import { randomUUID } from 'node:crypto'
-import { Redis } from 'ioredis'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { peerState, sleep, startCollab, type TestCollab, waitFor } from '../testing/harness.js'
+import {
+  clusteredSuiteUnavailable,
+  peerState,
+  sleep,
+  startCollab,
+  type TestCollab,
+  waitFor,
+} from '../testing/harness.js'
 
 const VALKEY_URL = process.env.VALKEY_URL
 
@@ -27,37 +33,7 @@ const VALKEY_URL = process.env.VALKEY_URL
  */
 const NEVER_PERSIST_WHILE_WE_LOOK = { COLLAB_DEBOUNCE_MS: '30000', COLLAB_MAX_DEBOUNCE_MS: '60000' }
 
-/** Is there really a Valkey behind `VALKEY_URL`? A URL in the environment is not an answer. */
-async function reachable(url: string): Promise<boolean> {
-  const client = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 2_000 })
-  client.on('error', () => {})
-  try {
-    await client.connect()
-    return (await client.ping()) === 'PONG'
-  } catch {
-    return false
-  } finally {
-    client.disconnect()
-  }
-}
-
-/**
- * Decided while the file is being collected, not in a hook: whether these tests run at all has to be
- * known before vitest asks for the list, or `skipIf` reads a value nothing has set yet.
- */
-const unavailable: string | null = !VALKEY_URL
-  ? 'VALKEY_URL is not set, so there is no Valkey to relay documents through.'
-  : (await reachable(VALKEY_URL))
-    ? null
-    : `Valkey is not answering on ${VALKEY_URL}.`
-
-if (unavailable) {
-  const message = `${unavailable} Start it with \`pnpm infra\` from the umbrella repository.`
-  // Skipping because the infrastructure is missing is fine on a laptop and dishonest in CI: there it
-  // would report a green multi-instance service that nobody ever ran two of.
-  if (process.env.CI) throw new Error(message)
-  process.stderr.write(`\n  ⚠ ${message}\n    The multi-instance tests will be skipped.\n\n`)
-}
+const unavailable = await clusteredSuiteUnavailable('The multi-instance tests')
 
 const textOf = (state: string, field = 'content') => {
   const doc = new Y.Doc()

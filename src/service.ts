@@ -148,9 +148,9 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
 
     async onStoreDocument({ documentName, document }) {
       const state = Y.encodeStateAsUpdate(document)
-      // A server-side read opens a direct connection to ask the other instances, and that loads the
-      // document here. Storing an empty one would leave a row behind saying a page nobody ever
-      // wrote exists.
+      // `document.apply` and `document.replace` open a direct connection, which stores on the way
+      // out whether or not the update they carried added anything. Storing an empty document would
+      // leave a row behind saying a page nobody ever wrote exists.
       if (isEmptyState(state)) return
       if (state.byteLength > env.COLLAB_MAX_DOCUMENT_BYTES) {
         kernel.log.warn(
@@ -159,7 +159,20 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
         )
         return
       }
-      await storeDocument(kernel, documentName, state)
+      const changed = await storeDocument(kernel, documentName, state)
+      /**
+       * Nothing is announced unless the document actually moved.
+       *
+       * This is what makes a read-and-announce loop impossible rather than merely absent.
+       * `collab.document.updated` has exactly one trigger — Postgres reporting that the row's bytes
+       * changed — and a reader cannot change them, so no read on any path can produce the event
+       * that would send a subscriber back to read again. Sustaining a cycle would need every hop to
+       * contribute new content, and a subscriber that only reads contributes none.
+       *
+       * It also keeps a deleted document quiet: the tombstone refuses the write, so a straggler
+       * still holding the document cannot announce updates to a page that no longer exists.
+       */
+      if (!changed) return
 
       // Periodically publish a plain-text snapshot so modules can index the document for search
       // without having to understand the CRDT encoding.

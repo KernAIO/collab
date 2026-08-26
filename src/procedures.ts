@@ -10,6 +10,7 @@
  * base64-encoded. That is declared once, in `@kernhq/contracts`, and both sides use it.
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Server } from '@hocuspocus/server'
 import { collabProcedures, type Principal } from '@kernhq/contracts'
 import { KernError, type Kernel, type ProcedureDef } from '@kernhq/kernel'
@@ -37,28 +38,56 @@ export interface ProcedureOptions {
 }
 
 /**
- * Read a document that this instance does not have open, through a direct connection.
+ * Read a document that this instance does not have open, without writing anything anywhere.
  *
- * A direct connection runs the load hooks, and with the Redis extension configured that load blocks
+ * Loading it here runs the load hooks, and with the Redis extension configured that load blocks
  * until a peer holding the document replies with its state — so this returns the freshest copy
  * wherever it lives, instead of a row that is up to `COLLAB_DEBOUNCE_MS` behind. When nobody else
  * has the document open the wait is skipped outright, so a lone instance pays a Postgres read and
- * nothing more.
+ * nothing more. Updates that arrive from a peer carry the extension's own transaction origin, which
+ * Hocuspocus excludes from the store hooks: the instance that owns those edits is the one that
+ * writes them down.
  *
- * `unloadImmediately: false` because this reads and changes nothing: the default persists the
- * document synchronously and then waits out the extension's `disconnectDelay`, about a second, on a
- * path that had nothing to flush.
+ * Deliberately not `openDirectConnection`. **Every** `DirectConnection.disconnect()` schedules
+ * `onStoreDocument` — that is what it is for, since a direct connection exists to write — and
+ * `unloadImmediately: false` only postpones it by the debounce. The store hook is what publishes
+ * `collab.document.updated`, quire's subscriber for that event calls `collab.document.state`
+ * straight back to flatten the prose itself, and a pure read therefore announced itself as an edit
+ * and fed itself for as long as the instance ran. `createDocument` is the same load path with no
+ * store attached to the way out.
+ *
+ * The direct-connection counter is what keeps the document from being unloaded underneath the read.
+ * It is released before the unload, and `unloadDocument` refuses while anyone is connected, while a
+ * store is pending and while the save mutex is held — so this can never take a document away from
+ * the people editing it. The unload is not awaited because the extension delays every one of them
+ * by `disconnectDelay`, about a second, and quire calls `document.snapshot` from inside an open
+ * Postgres transaction.
  */
-async function readThroughPeers<T>(server: Server, name: string, read: (doc: Y.Doc) => T): Promise<T> {
-  const connection = await server.hocuspocus.openDirectConnection(name)
+async function readLoadedDocument<T>(
+  kernel: Kernel,
+  server: Server,
+  name: string,
+  read: (doc: Y.Doc) => T,
+): Promise<T> {
+  const document = await server.hocuspocus.createDocument(
+    name,
+    new Request('http://localhost'),
+    randomUUID(),
+    {
+      isAuthenticated: true,
+      readOnly: true,
+    },
+  )
+  document.addDirectConnection()
   try {
-    let out!: T
-    await connection.transact((doc) => {
-      out = read(doc)
-    })
-    return out
+    return read(document)
   } finally {
-    await connection.disconnect({ unloadImmediately: false })
+    document.removeDirectConnection()
+    void server.hocuspocus
+      .unloadDocument(document)
+      .catch((err) =>
+        kernel.log.warn({ err, documentName: name }, 'failed to unload a document after a read'),
+      )
   }
 }
 
@@ -78,7 +107,7 @@ async function resolveDoc(
   if (live) return live
   if (opts.clustered) {
     // The load hook reads storage too, so this one path covers both a peer's copy and the row.
-    const state = await readThroughPeers(server, name, (d) => Y.encodeStateAsUpdate(d))
+    const state = await readLoadedDocument(kernel, server, name, (d) => Y.encodeStateAsUpdate(d))
     if (isEmptyState(state)) return null
     const doc = new Y.Doc()
     Y.applyUpdate(doc, state)
@@ -120,7 +149,7 @@ export function createProcedures(
         // this version would act on.
         const state = live
           ? Buffer.from(Y.encodeStateAsUpdate(live))
-          : Buffer.from(await readThroughPeers(server, input.name, (d) => Y.encodeStateAsUpdate(d)))
+          : Buffer.from(await readLoadedDocument(kernel, server, input.name, (d) => Y.encodeStateAsUpdate(d)))
         if (isEmptyState(state) && !stored.state) {
           return { name: input.name, state: null, size: 0, updatedAt: null }
         }

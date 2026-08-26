@@ -14,15 +14,18 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HocuspocusProvider } from '@hocuspocus/provider'
+import type { Extension } from '@hocuspocus/server'
 import { ANONYMOUS, type MembershipSummary, type Principal, WorkspaceId } from '@kernhq/contracts'
 import type { Kernel } from '@kernhq/kernel'
 import { uuidv7 } from '@kernhq/kernel'
 import { createScratchDatabase } from '@kernhq/testing'
 import { config as loadDotenv } from 'dotenv'
+import { sql } from 'drizzle-orm'
+import { Redis } from 'ioredis'
 import pg from 'pg'
 import WebSocket from 'ws'
 import * as Y from 'yjs'
-import { formatDocumentName, readDocument, type StoredDocument } from '../documents.js'
+import { formatDocumentName, parseDocumentName, readDocument, type StoredDocument } from '../documents.js'
 import { type CollabService, createCollabService } from '../service.js'
 
 /**
@@ -68,6 +71,15 @@ export interface TestClient {
   destroy(): void
 }
 
+/** One `kern_collab.documents` row, exactly as it is stored — deleted ones included. */
+export interface DocumentRow {
+  name: string
+  state: Uint8Array
+  size: number
+  updatedAt: string
+  deletedAt: string | null
+}
+
 export interface TestCollab {
   /** instance 0 — what every single-instance suite means by "the service" */
   service: CollabService
@@ -93,6 +105,15 @@ export interface TestCollab {
   connectWithCookie(documentName: string, cookie: string, opts?: { instance?: number }): TestClient
   /** what is actually written down for a document, read the way a procedure reads it */
   stored(documentName: string): Promise<StoredDocument>
+  /**
+   * The row itself, tombstone and all.
+   *
+   * `stored` reads the way every procedure reads — `where deleted_at is null` — so a row whose
+   * prose was written back after a delete is indistinguishable from one that stayed deleted, and an
+   * assertion made through it passes with the tombstone guard removed. Anything asserting what
+   * storage *does* has to look at the row.
+   */
+  row(documentName: string): Promise<DocumentRow | null>
   /** register (or replace) a module's `collab.access` answer */
   setAccess(
     module: string,
@@ -246,6 +267,31 @@ export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCo
     stored(documentName) {
       return readDocument(kernel, documentName)
     },
+    async row(documentName) {
+      const doc = parseDocumentName(documentName)
+      if (!doc) return null
+      return kernel.database.withWorkspace(doc.workspaceId, async (tx) => {
+        const res = await tx.execute<{
+          name: string
+          state: Buffer
+          size: number
+          updated_at: Date | string
+          deleted_at: Date | string | null
+        }>(
+          sql`select name, state, size, updated_at, deleted_at
+              from kern_collab.documents where name = ${documentName}`,
+        )
+        const r = res.rows[0]
+        if (!r) return null
+        return {
+          name: r.name,
+          state: new Uint8Array(r.state),
+          size: r.size,
+          updatedAt: new Date(r.updated_at).toISOString(),
+          deletedAt: r.deleted_at ? new Date(r.deleted_at).toISOString() : null,
+        }
+      })
+    },
     connect(documentName, user, o = {}) {
       const doc = new Y.Doc()
       let resolveSynced!: () => void
@@ -343,6 +389,69 @@ export async function startCollab(opts: StartCollabOptions = {}): Promise<TestCo
       }
     },
   }
+}
+
+/**
+ * Count the `onStoreDocument` runs of one instance, at the hook itself.
+ *
+ * Waiting for a *side effect* of a store cannot tell "the store has not happened yet" from "the
+ * store happened and the row refused it" — which is exactly the difference every guard on the
+ * upsert makes, and why an assertion that only sleeps passes with the guard deleted. This waits for
+ * the store itself.
+ */
+export function watchStores(service: CollabService): { names: string[]; stop(): void } {
+  const names: string[] = []
+  const { extensions } = service.server.hocuspocus.configuration
+  const spy: Extension = {
+    onStoreDocument: async ({ documentName }) => {
+      names.push(documentName)
+    },
+  }
+  extensions.push(spy)
+  return {
+    names,
+    stop() {
+      const at = extensions.indexOf(spy)
+      if (at >= 0) extensions.splice(at, 1)
+    },
+  }
+}
+
+/** Is there really a Valkey behind `VALKEY_URL`? A URL in the environment is not an answer. */
+export async function valkeyReachable(url: string): Promise<boolean> {
+  const client = new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 2_000 })
+  client.on('error', () => {})
+  try {
+    await client.connect()
+    return (await client.ping()) === 'PONG'
+  } catch {
+    return false
+  } finally {
+    client.disconnect()
+  }
+}
+
+/**
+ * Why a suite that needs the clustered shape cannot run, or null when it can.
+ *
+ * Call it while the file is being collected, not in a hook: whether those tests run at all has to be
+ * known before vitest asks for the list, or `skipIf` reads a value nothing has set yet.
+ *
+ * Skipping because the infrastructure is missing is fine on a laptop and dishonest in CI — there it
+ * would report a green clustered service that nobody ever ran clustered — so `CI` throws instead.
+ */
+export async function clusteredSuiteUnavailable(what: string): Promise<string | null> {
+  const url = process.env.VALKEY_URL
+  const reason = !url
+    ? 'VALKEY_URL is not set, so there is no Valkey to relay documents through.'
+    : (await valkeyReachable(url))
+      ? null
+      : `Valkey is not answering on ${url}.`
+  if (!reason) return null
+  const message = `${reason} Start it with \`pnpm infra\` from the umbrella repository.`
+  if (process.env.CI) throw new Error(message)
+  process.stderr.write(`\n  ⚠ ${message}\n    ${what} will be skipped.\n\n`)
+  return message
 }
 
 /** Poll `check` until it returns a truthy value, or fail with `label`. */

@@ -4,8 +4,10 @@
  * A module keeping version history, rendering a page nobody has open, restoring a version or
  * importing one needs the state itself, and the socket does not give it to anybody but a browser.
  */
+import { collabEvents } from '@kernhq/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
+import { storeDocument } from '../documents.js'
 import { sleep, startCollab, type TestCollab, waitFor } from '../testing/harness.js'
 
 let collab: TestCollab
@@ -257,6 +259,79 @@ describe('document.presence', () => {
   })
 })
 
+/**
+ * What the upsert refuses, observed on the row.
+ *
+ * Both guards are invisible from anywhere else in this service: every read filters deleted rows out,
+ * and nothing a procedure returns exposes `updated_at` of a document that did not change. So both
+ * are asserted here through `collab.row`, which is the storage itself.
+ */
+describe('what is written down', () => {
+  it('leaves no row at all for a document nobody ever wrote', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    // A direct connection stores on the way out whether or not the update it carried added
+    // anything, so an empty one is the shortest path to the store hook with an empty document.
+    const empty = new Y.Doc()
+    await call('document.apply', {
+      name,
+      update: Buffer.from(Y.encodeStateAsUpdate(empty)).toString('base64'),
+    })
+
+    expect(
+      await collab.row(name),
+      'a row exists for a page nobody has ever written, so the tree and search will list it',
+    ).toBeNull()
+  })
+
+  it('does not touch updated_at when the same bytes are stored again', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    const source = new Y.Doc()
+    source.getText('content').insert(0, 'written once, stored twice')
+    const update = Buffer.from(Y.encodeStateAsUpdate(source)).toString('base64')
+
+    await call('document.apply', { name, update })
+    const first = await collab.row(name)
+    expect(first?.updatedAt).toBeTruthy()
+
+    // The same update again: it merges into a document that already contains it, so what reaches
+    // storage is byte for byte what is already there. That is what a straggler's next debounced
+    // store looks like, and what a second instance storing the merged document looks like.
+    await sleep(20)
+    await call('document.apply', { name, update })
+
+    const second = await collab.row(name)
+    expect(second?.state).toEqual(first?.state)
+    expect(
+      second?.updatedAt,
+      'a store that changed nothing moved updated_at, so a module deciding whether it already has this version is told it does not',
+    ).toBe(first?.updatedAt)
+  })
+
+  it('announces nothing when a store changes nothing', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    const source = new Y.Doc()
+    source.getText('content').insert(0, 'stored twice, announced once')
+    const update = Buffer.from(Y.encodeStateAsUpdate(source)).toString('base64')
+
+    const announced: string[] = []
+    const off = await collab.kernel.events.subscribe(collabEvents.documentUpdated.name, (e) => {
+      if ((e.payload as { name?: string }).name === name) announced.push(e.name)
+    })
+    try {
+      await call('document.apply', { name, update })
+      expect(announced, 'a real first write has to be announced, or this proves nothing').toHaveLength(1)
+
+      await call('document.apply', { name, update })
+      expect(
+        announced,
+        'a store that wrote nothing was announced as an edit, which is what a subscriber reading the document back turns into a loop',
+      ).toHaveLength(1)
+    } finally {
+      off()
+    }
+  })
+})
+
 describe('document.delete', () => {
   it('forgets the state and disconnects whoever still has it open', async () => {
     const name = collab.documentName({ module: 'quire' })
@@ -280,23 +355,42 @@ describe('document.delete', () => {
     const author = collab.connect(name, collab.user('Author'))
     await author.synced
     author.text.insert(0, 'about to be deleted')
-    await stateSaying(name, 'about to be deleted')
+    const seen = await stateSaying(name, 'about to be deleted')
     await waitFor(async () => (await call<State>('document.state', { name })).updatedAt, 'the first write')
 
     await call('document.delete', { name })
 
-    // Somebody was still typing when the page was deleted, and the provider reconnects the moment it
-    // is disconnected. Across two instances the same thing is the copy the other process is holding,
-    // which nothing here can reach. The tombstone refuses both: the live document may say whatever
-    // the people still in it say, but the row does not come back.
-    await author.synced
-    author.text.insert(author.text.length, ', and typed afterwards')
-    await sleep(400) // longer than the harness debounce, so a store has certainly been attempted
+    /**
+     * Another instance is still holding this document, and there is no fan-out channel in this
+     * system that would tell it the page is gone — so its next debounced store lands after the
+     * delete, carrying the prose. `storeDocument` is exactly what that instance's store hook calls,
+     * and calling it here is the only way to run that store from one process.
+     *
+     * A reconnecting browser cannot stand in for it, which is worth knowing before writing that
+     * test again: `document.delete` closes the socket with `ResetConnection`, and the provider
+     * reconnects the *socket* without ever reopening the document, so nothing is stored at all —
+     * an assertion made after it never reaches the tombstone and passes with the tombstone deleted.
+     */
+    expect(
+      await storeDocument(collab.kernel, name, new Uint8Array(Buffer.from(seen.state as string, 'base64'))),
+      'the tombstone accepted a write, so a delete is undone by whichever instance still has the page',
+    ).toBe(false)
 
     expect(
       (await collab.stored(name)).state,
       'a deleted page wrote itself back the moment somebody who still had it open typed',
     ).toBeNull()
+
+    // And the row itself: `stored` filters `deleted_at is null`, so it cannot tell a tombstone that
+    // stayed empty from one the straggler filled back in. Every assertion that reaches this guard
+    // through a read in this service passes with the guard deleted.
+    const row = await collab.row(name)
+    expect(row, 'the tombstone was removed entirely, so nothing refuses the next straggler').not.toBeNull()
+    expect(row?.deletedAt, 'the row stopped being a tombstone').not.toBeNull()
+    expect(
+      row?.state.byteLength,
+      'the prose is back inside the tombstone: invisible to every reader here, and handed straight back the day the row is undeleted',
+    ).toBe(0)
 
     // And once everybody has gone, nothing is left to serve it either.
     author.destroy()

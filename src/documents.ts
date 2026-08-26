@@ -118,30 +118,41 @@ export async function readDocument(kernel: Kernel, name: string): Promise<Stored
 }
 
 /**
+ * Write a document down, and say whether that changed anything.
+ *
  * Two conditions guard the update, and they are separate ideas.
  *
  * `deleted_at is null` is the tombstone: another instance may still hold this document in memory,
  * and its next debounced store would otherwise put the prose straight back after a delete. The
- * straggler's write is refused rather than racing it.
+ * straggler's write is refused rather than racing it. It refuses silently — the row keeps the empty
+ * state and the `deleted_at` it already had — so nothing but the row itself can tell you it worked:
+ * every read in this service filters deleted rows out, and so hides a resurrected one.
  *
  * `state is distinct from excluded.state` keeps `updated_at` meaning "when the content last
- * changed". A server-side read opens a direct connection, which schedules a store of a document
- * nobody edited — without this, reading a document would keep marking it as freshly written, and a
- * module deciding whether it already has this version would act on that.
+ * changed". Two instances holding one document both store the merged result, and a straggler
+ * re-stores bytes that are already there; without this each of those would mark the document as
+ * freshly written, and a module deciding whether it already has this version would act on it.
+ *
+ * The **return value** is what stops a read being announced as an edit. `collab.document.updated`
+ * is published from the store hook, and the only honest trigger for it is Postgres reporting that
+ * the row actually moved: `returning name` yields no row when either guard refused. A caller that
+ * changed nothing therefore cannot produce an event, whatever brought it here.
  */
-export async function storeDocument(kernel: Kernel, name: string, state: Uint8Array): Promise<void> {
+export async function storeDocument(kernel: Kernel, name: string, state: Uint8Array): Promise<boolean> {
   const doc = parseDocumentName(name)
-  if (!doc) return
+  if (!doc) return false
   const buf = Buffer.from(state)
-  await kernel.database.withWorkspace(doc.workspaceId, (tx) =>
-    tx.execute(sql`
+  return kernel.database.withWorkspace(doc.workspaceId, async (tx) => {
+    const res = await tx.execute<{ name: string }>(sql`
       insert into kern_collab.documents (name, workspace_id, module, type, object_id, state, size, updated_at)
       values (${name}, ${doc.workspaceId}::uuid, ${doc.module}, ${doc.type}, ${doc.objectId}::uuid, ${buf}, ${buf.length}, now())
       on conflict (name) do update set state = excluded.state, size = excluded.size, updated_at = now()
       where kern_collab.documents.deleted_at is null
         and kern_collab.documents.state is distinct from excluded.state
-    `),
-  )
+      returning name
+    `)
+    return res.rows.length > 0
+  })
 }
 
 /**

@@ -158,13 +158,43 @@ edits and stores the result.
 - **`[onStoreDocument] Another instance is already storing this document` on stderr is the lock
   working**, not a fault. Hocuspocus `console.error`s every hook rejection, including the expected
   `SkipFurtherHooksError`, so it bypasses the kernel logger and shows up in test output.
-- **A read that opens a direct connection costs about a second to close if you let it unload.** The
-  extension's `beforeUnloadDocument` waits out `disconnectDelay`. `document.state` and
-  `document.snapshot` therefore disconnect with `unloadImmediately: false` — they change nothing, so
-  there is nothing to flush — and it matters because quire calls `collab.document.snapshot` from
-  inside an open Postgres transaction (`module-quire/src/server/services/versions.ts`).
-  `document.apply` and `document.replace` keep the default `true`: they pay that second to be
-  durable by the time the call returns, which is the whole point of them.
+- **A read must never open a direct connection, because every direct connection stores.**
+  `DirectConnection.disconnect()` schedules `onStoreDocument` unconditionally — that is what it is
+  for, since a direct connection exists to write — and `unloadImmediately: false` only postpones it
+  by the debounce rather than skipping it. The store hook is what publishes
+  `collab.document.updated`, and quire's subscriber for that event calls `collab.document.state`
+  straight back, so in a clustered instance a single read announced itself as an edit and the pair
+  fed itself for as long as the process ran. `document.state` and `document.snapshot` now load
+  through `hocuspocus.createDocument` and release through `unloadDocument`, which is the same load
+  path — peers included — with no store attached to the way out. `document.apply` and
+  `document.replace` keep the direct connection: they write, and they pay the extension's
+  `disconnectDelay` to be durable by the time the call returns. A read does not await its unload,
+  because quire calls `collab.document.snapshot` from inside an open Postgres transaction
+  (`module-quire/src/server/services/versions.ts`).
+- **`collab.document.updated` has exactly one trigger: Postgres reporting that the row moved.**
+  `storeDocument` returns whether its upsert actually wrote — `returning name` yields nothing when
+  either guard refuses — and the store hook publishes only then. That is what makes a
+  read-and-announce loop *impossible* rather than merely absent: an event needs new bytes, a reader
+  contributes none, so a subscriber that only reads cannot sustain a cycle whatever path a future
+  read takes. It also keeps a deleted document quiet.
+- **A client force-disconnected by `document.delete` reconnects its socket and never reopens the
+  document.** `closeConnections` closes with `ResetConnection`; `HocuspocusProviderWebsocket`
+  reconnects and reports `connected`, while the document-level provider stays `synced: false` and
+  the server never re-creates the document. Harmless for a delete — the page is gone — but it means
+  a browser client cannot stand in for the straggler in a test: nothing is stored at all, so the
+  assertion never reaches the tombstone and passes with the tombstone deleted. Drive that store
+  through `storeDocument`, which is what the other instance's store hook calls.
+- **Three guards here are invisible to every reader in this service, so test them on the row.**
+  `readDocument` and `loadDocument` both filter `deleted_at is null`, so a tombstone the straggler
+  refilled looks exactly like one that stayed empty; and nothing a procedure returns exposes
+  `updated_at` of a document that did not change. `harness.row()` reads the row itself, tombstones
+  included, and is the only honest place to assert the upsert's `deleted_at is null` and
+  `state is distinct from excluded.state`, or the `isEmptyState` early return. All three used to
+  pass with the implementation deleted.
+- **`harness.watchStores(service)` waits for the store itself.** Waiting for a *side effect* of a
+  store cannot tell "the store has not happened yet" from "the store happened and the row refused
+  it", which is the exact difference every guard on the upsert makes — so a test that only sleeps is
+  green either way.
 - **An ioredis client with no `error` listener takes the process down.** The extension attaches none
   to the clients it builds, and it builds them in its constructor — so the `createClient` factory is
   the only point guaranteed to be earlier than the first connection attempt.
