@@ -13,7 +13,7 @@
     "dev": "tsx watch --clear-screen=false src/main.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "lint": "biome check .",
+    "lint": "biome check . && node scripts/check-ranges.mjs package.json",
     "format": "biome format --write .",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"
@@ -21,7 +21,7 @@
   "dependencies": {
     "@hocuspocus/extension-redis": "^4.6.0",
     "@hocuspocus/server": "^4.6.0",
-    "@kernhq/contracts": "^0.5.1",
+    "@kernhq/contracts": "^0.6.1",
     "@kernhq/kernel": "^0.7.0",
     "dotenv": "^17.4.0",
     "drizzle-orm": "^0.45.0",
