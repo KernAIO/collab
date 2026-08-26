@@ -1,10 +1,20 @@
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Redis as RedisExtension } from '@hocuspocus/extension-redis'
 import { Server } from '@hocuspocus/server'
 import { ANONYMOUS, collabEvents } from '@kernhq/contracts'
 import { createKernel, type Kernel } from '@kernhq/kernel'
+import { Redis as IORedis } from 'ioredis'
 import * as Y from 'yjs'
-import { loadDocument, parseDocumentName, resolveAccess, SCHEMA, storeDocument } from './documents.js'
+import {
+  isEmptyState,
+  loadDocument,
+  parseDocumentName,
+  resolveAccess,
+  SCHEMA,
+  storeDocument,
+} from './documents.js'
 import { type CollabEnv, loadCollabEnv } from './env.js'
 import { createPrincipals, type Principals } from './principal.js'
 import { createProcedures } from './procedures.js'
@@ -21,6 +31,8 @@ export interface CollabService {
   env: CollabEnv
   server: Server
   principals: Principals
+  /** true when this process relays documents through Valkey, so more than one of it may run */
+  clustered: boolean
   stats(): { documents: number; connections: number }
   listen(): Promise<void>
   stop(): Promise<void>
@@ -48,6 +60,41 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
   const principals = createPrincipals(kernel)
   const lastSnapshot = new Map<string, number>()
 
+  /**
+   * Without this every Y.Doc lives in one process's memory, so two instances behind a load balancer
+   * are two different documents and whoever lands on the wrong one loses their edits. With it the
+   * instances relay sync and awareness through Valkey and take a lock before writing, so a plain
+   * round-robin proxy is enough and no session affinity is needed.
+   *
+   * Configured only when `VALKEY_URL` is set. A dev run and the test harness pass it as undefined on
+   * purpose and must stay one honest process — `src/tests/cluster.test.ts` asserts both halves, and
+   * its control is what fails if this is ever wired unconditionally.
+   */
+  const clustered = Boolean(kernel.env.VALKEY_URL)
+  const extensions = clustered
+    ? [
+        new RedisExtension({
+          prefix: env.COLLAB_REDIS_PREFIX,
+          /**
+           * Unique per process, never a stable name. The extension drops any message whose
+           * identifier equals its own, so two instances sharing one identifier ignore each other
+           * completely — every single-instance test still passes and nothing is logged. It is
+           * length-prefixed with one byte on the wire, so it also has to stay under 255 bytes.
+           */
+          identifier: `collab-${randomUUID()}`,
+          createClient: () => {
+            const client = new IORedis(kernel.env.VALKEY_URL as string)
+            // An ioredis client with no `error` listener turns a momentary Valkey blip into an
+            // unhandled 'error' event, which takes the process down. The extension builds its own
+            // clients in its constructor, so this factory is the only point guaranteed to be
+            // earlier than the first connection attempt.
+            client.on('error', (err: Error) => kernel.log.warn({ err: err.message }, 'valkey error'))
+            return client
+          },
+        }),
+      ]
+    : []
+
   const server = new Server({
     name: 'kern-collab',
     port: kernel.env.PORT,
@@ -57,6 +104,7 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
     quiet: true,
     stopOnSignals: false, // main.ts owns shutdown so the kernel closes too
     websocketOptions: { maxPayload: env.COLLAB_MAX_DOCUMENT_BYTES },
+    extensions,
 
     async onAuthenticate({ documentName, token, connectionConfig, requestHeaders }) {
       const doc = parseDocumentName(documentName)
@@ -100,6 +148,10 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
 
     async onStoreDocument({ documentName, document }) {
       const state = Y.encodeStateAsUpdate(document)
+      // A server-side read opens a direct connection to ask the other instances, and that loads the
+      // document here. Storing an empty one would leave a row behind saying a page nobody ever
+      // wrote exists.
+      if (isEmptyState(state)) return
       if (state.byteLength > env.COLLAB_MAX_DOCUMENT_BYTES) {
         kernel.log.warn(
           { documentName, bytes: state.byteLength },
@@ -161,20 +213,21 @@ export async function createCollabService(opts: CollabServiceOptions = {}): Prom
   // Registered after the server exists, because every one of them acts on a live document.
   // `register` also subscribes `kern.rpc.collab.document.*` when NATS is configured, which is how
   // core — where the modules that own these documents are hosted — reaches them.
-  kernel.broker.register('collab', createProcedures(kernel, server))
+  kernel.broker.register('collab', createProcedures(kernel, server, { clustered }))
 
   return {
     kernel,
     env,
     server,
     principals,
+    clustered,
     stats: () => ({
       documents: server.hocuspocus.getDocumentsCount(),
       connections: server.hocuspocus.getConnectionsCount(),
     }),
     async listen() {
       await server.listen()
-      kernel.log.info({ port: kernel.env.PORT, path: '/collab' }, 'collab service listening')
+      kernel.log.info({ port: kernel.env.PORT, path: '/collab', clustered }, 'collab service listening')
     },
     async stop() {
       await server.destroy()

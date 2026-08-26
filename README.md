@@ -52,6 +52,27 @@ The service creates its own database tables the first time it starts.
 
 **Expected result:** `migrations applied`, then the service listens on port 4300 at path `/collab`.
 
+## Run more than one
+
+Goal: serve collaborative documents from more than one process, behind an ordinary load balancer.
+
+Set `VALKEY_URL` on every instance. The self-host, Coolify and cloud compose files already do.
+
+**Expected result:** each instance logs `collab service listening` with `clustered: true`.
+
+The instances then relay edits and presence to each other through Valkey, and take a lock before
+writing a document down. A plain round-robin proxy is enough — you do not need session affinity,
+sticky sessions, or a consistent hash on the document name.
+
+Without `VALKEY_URL` the service is one honest process. Two of those are two different documents,
+and whoever lands on the wrong one loses their edits.
+
+If two Kern deployments share one Valkey, give each of them its own `COLLAB_REDIS_PREFIX`. Every
+channel and lock is `<prefix>:<documentName>`, so one prefix means one set of documents.
+
+One thing stays per-instance: `collab.document.presence` reports the connections on whichever
+instance answered the call, not on all of them. Nothing in Kern calls it yet.
+
 ## How a document is addressed
 
 A document name says everything the service needs:
@@ -70,8 +91,9 @@ workspace membership, which keeps documents usable while that module is still be
   of quiet, or fifteen seconds at the latest.
 - **Search does not read the merged document.** A plain-text snapshot is published periodically as
   `collab.document.updated`, so a module can index the prose without decoding the merge structure.
-- There is **no editor yet**. This service runs and is tested, but no Kern screen opens a document
-  in it so far.
+- **A deleted document leaves a tombstone.** The prose goes at once; the row stays, holding only the
+  name and timestamps. Another instance may still have the document open, and without the tombstone
+  its next write would put the prose straight back.
 
 ## Contributing
 

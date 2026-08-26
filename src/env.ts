@@ -25,6 +25,12 @@ export const CollabEnv = z.object({
     .number()
     .int()
     .default(5 * 60_000),
+  /**
+   * Namespace for this deployment's Hocuspocus channels and locks in Valkey. Every key is
+   * `<prefix>:<documentName>`, so two Kern instances that share one Valkey need two prefixes or
+   * they will relay each other's documents.
+   */
+  COLLAB_REDIS_PREFIX: z.string().default('kern:collab'),
 })
 export type CollabEnv = z.infer<typeof CollabEnv>
 

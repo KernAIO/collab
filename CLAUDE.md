@@ -42,8 +42,8 @@ The repositories are **public**, so every commit is visible the moment it is pus
 
 ## CI
 Every service repository's CI runs the real suites, so the workflow starts the infrastructure they
-need as service containers: Postgres (`pgvector/pgvector:pg18`) everywhere, Valkey for `chat`,
-Mailpit for `mail`. Things learned the hard way:
+need as service containers: Postgres (`pgvector/pgvector:pg18`) everywhere, Valkey for `chat` and
+`collab`, Mailpit for `mail`. Things learned the hard way:
 - Address a service container as **127.0.0.1**, never `localhost` — a runner resolves `localhost` to
   `::1` first, where the published port is not listening, and `fetch` does not retry over IPv4.
 - Do not set `registry-url` on `actions/setup-node` in an install job. It writes an `.npmrc` with a
@@ -132,3 +132,48 @@ edits and stores the result.
   the provider is ignored (and rejected by the types); handing the provider a pre-built socket makes it
   stop managing the connection, so it never connects. Set the global `WebSocket` instead — that is what
   `src/testing/harness.ts` does.
+
+**Running more than one**
+- **`VALKEY_URL` is the whole switch.** Set, and `@hocuspocus/extension-redis` relays sync and
+  awareness between instances and arbitrates persistence with a redlock, so a plain round-robin proxy
+  is enough. Unset, and the service is one honest process — which is what `pnpm dev` and every
+  single-instance suite is, deliberately: `src/testing/harness.ts` passes `VALKEY_URL: undefined` and
+  that line must stay. `src/tests/cluster.test.ts` asserts both halves, and its
+  control is what fails if anybody ever wires the extension unconditionally.
+- **A stable `identifier` silently disables the whole thing, and every other test still passes.** The
+  extension drops any message whose identifier equals its own, so two instances sharing one ignore
+  each other completely and nothing is logged. It is `collab-${randomUUID()}` per process for that
+  reason — do not tidy it into a readable constant. (It is length-prefixed with one byte on the wire,
+  so it also has to stay under 255 bytes.)
+- **Keep `@hocuspocus/server` and `@hocuspocus/extension-redis` on the same minor, and bump them
+  together.** The extension declares the server and `@hocuspocus/common` as *dependencies*, not
+  peers, so a range drift puts a second copy in the tree — and then `Hocuspocus`'s
+  `error instanceof SkipFurtherHooksError` stops matching, so every store the redlock correctly
+  skipped surfaces as a real failure.
+- **A test that Postgres could satisfy proves nothing about the relay.** With the harness's normal
+  50 ms debounce, the second instance would pick the text up from the database and the suite would
+  pass with the extension deleted. `cluster.test.ts` sets a 30-second debounce and asserts the row is
+  still empty at the moment the two clients agree. Do not "fix" a slow-looking cluster test by
+  lowering that.
+- **`[onStoreDocument] Another instance is already storing this document` on stderr is the lock
+  working**, not a fault. Hocuspocus `console.error`s every hook rejection, including the expected
+  `SkipFurtherHooksError`, so it bypasses the kernel logger and shows up in test output.
+- **A read that opens a direct connection costs about a second to close if you let it unload.** The
+  extension's `beforeUnloadDocument` waits out `disconnectDelay`. `document.state` and
+  `document.snapshot` therefore disconnect with `unloadImmediately: false` — they change nothing, so
+  there is nothing to flush — and it matters because quire calls `collab.document.snapshot` from
+  inside an open Postgres transaction (`module-quire/src/server/services/versions.ts`).
+  `document.apply` and `document.replace` keep the default `true`: they pay that second to be
+  durable by the time the call returns, which is the whole point of them.
+- **An ioredis client with no `error` listener takes the process down.** The extension attaches none
+  to the clients it builds, and it builds them in its constructor — so the `createClient` factory is
+  the only point guaranteed to be earlier than the first connection attempt.
+- **A delete cannot be broadcast, so it is a tombstone.** `NatsEventBus.subscribe` shares one durable
+  consumer across replicas of a service, so an event load-balances exactly the way an RPC does —
+  there is no fan-out channel in this system. `deleteDocument` therefore blanks the prose and sets
+  `deleted_at`, and `storeDocument`'s upsert carries `where deleted_at is null`, so an instance that
+  still has the document open cannot write it back. The live copy keeps serving whoever is still in
+  it until they leave; the row does not come back.
+- **`document.presence` is per-instance on purpose.** It reports the connections on whichever
+  instance the broker routed the call to. Aggregating properly needs a request/response fan-out over
+  Valkey with a timeout, and nothing calls the procedure yet.

@@ -20,6 +20,7 @@ import {
 } from '@kernhq/contracts'
 import type { Kernel } from '@kernhq/kernel'
 import { sql } from 'drizzle-orm'
+import * as Y from 'yjs'
 
 export type DocumentName = CollabDocument
 export type DocumentAccess = CollabAccess
@@ -27,6 +28,21 @@ export const parseDocumentName = parseCollabDocument
 export const formatDocumentName = formatCollabDocument
 
 export const SCHEMA = 'kern_collab'
+
+/** What `Y.encodeStateAsUpdate` produces for a document nobody has ever touched. */
+const EMPTY_STATE = Buffer.from(Y.encodeStateAsUpdate(new Y.Doc()))
+
+/**
+ * A state that carries nothing — no content, no deletions, no shared types.
+ *
+ * An empty document is indistinguishable from no document: loading either produces the same thing.
+ * So nothing writes a row for one, and a read that finds one answers "there is no such document".
+ * Deleting every paragraph of a real document does not produce this — the deletions are part of the
+ * state.
+ */
+export function isEmptyState(state: Uint8Array): boolean {
+  return Buffer.from(state).equals(EMPTY_STATE)
+}
 
 /**
  * Membership is necessary but not sufficient: the owning module has the final say. A module that does
@@ -69,7 +85,7 @@ export async function loadDocument(kernel: Kernel, name: string): Promise<Uint8A
   if (!doc) return null
   return kernel.database.withWorkspace(doc.workspaceId, async (tx) => {
     const res = await tx.execute<{ state: Buffer }>(
-      sql`select state from kern_collab.documents where name = ${name}`,
+      sql`select state from kern_collab.documents where name = ${name} and deleted_at is null`,
     )
     const row = res.rows[0]
     return row ? new Uint8Array(row.state) : null
@@ -88,7 +104,7 @@ export async function readDocument(kernel: Kernel, name: string): Promise<Stored
   if (!doc) return { state: null, size: 0, updatedAt: null }
   return kernel.database.withWorkspace(doc.workspaceId, async (tx) => {
     const res = await tx.execute<{ state: Buffer; size: number; updated_at: Date | string }>(
-      sql`select state, size, updated_at from kern_collab.documents where name = ${name}`,
+      sql`select state, size, updated_at from kern_collab.documents where name = ${name} and deleted_at is null`,
     )
     const row = res.rows[0]
     if (!row) return { state: null, size: 0, updatedAt: null }
@@ -101,6 +117,18 @@ export async function readDocument(kernel: Kernel, name: string): Promise<Stored
   })
 }
 
+/**
+ * Two conditions guard the update, and they are separate ideas.
+ *
+ * `deleted_at is null` is the tombstone: another instance may still hold this document in memory,
+ * and its next debounced store would otherwise put the prose straight back after a delete. The
+ * straggler's write is refused rather than racing it.
+ *
+ * `state is distinct from excluded.state` keeps `updated_at` meaning "when the content last
+ * changed". A server-side read opens a direct connection, which schedules a store of a document
+ * nobody edited — without this, reading a document would keep marking it as freshly written, and a
+ * module deciding whether it already has this version would act on that.
+ */
 export async function storeDocument(kernel: Kernel, name: string, state: Uint8Array): Promise<void> {
   const doc = parseDocumentName(name)
   if (!doc) return
@@ -110,6 +138,8 @@ export async function storeDocument(kernel: Kernel, name: string, state: Uint8Ar
       insert into kern_collab.documents (name, workspace_id, module, type, object_id, state, size, updated_at)
       values (${name}, ${doc.workspaceId}::uuid, ${doc.module}, ${doc.type}, ${doc.objectId}::uuid, ${buf}, ${buf.length}, now())
       on conflict (name) do update set state = excluded.state, size = excluded.size, updated_at = now()
+      where kern_collab.documents.deleted_at is null
+        and kern_collab.documents.state is distinct from excluded.state
     `),
   )
 }
@@ -117,11 +147,20 @@ export async function storeDocument(kernel: Kernel, name: string, state: Uint8Ar
 /**
  * Nothing else removes these rows. A module that deletes the object behind a document calls this,
  * or the state outlives the page for ever.
+ *
+ * The prose goes immediately; the row stays as a tombstone holding only the name, workspace, module,
+ * type, object id and timestamps. That is what stops an instance which still has the document open
+ * from writing it back — there is no fan-out channel in this system that would let a delete reach
+ * every instance, so the refusal has to live where every instance already writes.
  */
 export async function deleteDocument(kernel: Kernel, name: string): Promise<void> {
   const doc = parseDocumentName(name)
   if (!doc) return
   await kernel.database.withWorkspace(doc.workspaceId, (tx) =>
-    tx.execute(sql`delete from kern_collab.documents where name = ${name}`),
+    tx.execute(sql`
+      update kern_collab.documents
+      set state = ''::bytea, size = 0, deleted_at = now(), updated_at = now()
+      where name = ${name}
+    `),
   )
 }

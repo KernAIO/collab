@@ -6,7 +6,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as Y from 'yjs'
-import { startCollab, type TestCollab, waitFor } from '../testing/harness.js'
+import { sleep, startCollab, type TestCollab, waitFor } from '../testing/harness.js'
 
 let collab: TestCollab
 
@@ -273,5 +273,36 @@ describe('document.delete', () => {
 
     const res = await call<State>('document.state', { name })
     expect(res.state, 'the row survived, so a deleted page keeps its prose for ever').toBeNull()
+  })
+
+  it('does not let a straggler write the prose back', async () => {
+    const name = collab.documentName({ module: 'quire' })
+    const author = collab.connect(name, collab.user('Author'))
+    await author.synced
+    author.text.insert(0, 'about to be deleted')
+    await stateSaying(name, 'about to be deleted')
+    await waitFor(async () => (await call<State>('document.state', { name })).updatedAt, 'the first write')
+
+    await call('document.delete', { name })
+
+    // Somebody was still typing when the page was deleted, and the provider reconnects the moment it
+    // is disconnected. Across two instances the same thing is the copy the other process is holding,
+    // which nothing here can reach. The tombstone refuses both: the live document may say whatever
+    // the people still in it say, but the row does not come back.
+    await author.synced
+    author.text.insert(author.text.length, ', and typed afterwards')
+    await sleep(400) // longer than the harness debounce, so a store has certainly been attempted
+
+    expect(
+      (await collab.stored(name)).state,
+      'a deleted page wrote itself back the moment somebody who still had it open typed',
+    ).toBeNull()
+
+    // And once everybody has gone, nothing is left to serve it either.
+    author.destroy()
+    await waitFor(async () => {
+      const res = await call<State>('document.state', { name })
+      return res.state === null ? true : null
+    }, 'the deleted document to be gone once the last client leaves')
   })
 })

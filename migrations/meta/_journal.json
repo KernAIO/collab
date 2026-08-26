@@ -3,6 +3,13 @@
   "dialect": "postgresql",
   "entries": [
     { "idx": 0, "version": "7", "when": 1787200000000, "tag": "0000_init", "breakpoints": true },
-    { "idx": 1, "version": "7", "when": 1787200001000, "tag": "0001_rls", "breakpoints": true }
+    { "idx": 1, "version": "7", "when": 1787200001000, "tag": "0001_rls", "breakpoints": true },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787200002000,
+      "tag": "0002_document_tombstones",
+      "breakpoints": true
+    }
   ]
 }

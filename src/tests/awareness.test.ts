@@ -7,7 +7,7 @@
  * and the browser only ever learns it as a hint it is free to ignore.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { startCollab, type TestClient, type TestCollab, waitFor } from '../testing/harness.js'
+import { peerState, startCollab, type TestCollab } from '../testing/harness.js'
 
 let collab: TestCollab
 
@@ -20,19 +20,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await collab?.stop()
 })
-
-/** The awareness state another client publishes for `user`, once it arrives. */
-async function peerState(observer: TestClient, name: string): Promise<Record<string, unknown>> {
-  return waitFor(() => {
-    // The provider only has an awareness instance once it is connected, so this is part of the wait
-    // rather than something to assert up front.
-    for (const state of observer.provider.awareness?.getStates().values() ?? []) {
-      const user = (state as Record<string, unknown>).user as { name?: string } | undefined
-      if (user?.name === name) return state as Record<string, unknown>
-    }
-    return null
-  }, `an awareness state for ${name}`)
-}
 
 describe('a read-only participant', () => {
   it('is visible to the others, but broadcasts no caret', async () => {

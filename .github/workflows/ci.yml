@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgres://kern:kern@127.0.0.1:5432/kern
+      # 127.0.0.1, never localhost: a runner resolves localhost to ::1 first, where the published
+      # port is not listening.
+      VALKEY_URL: redis://127.0.0.1:6379
     services:
       # The suites run against a real Postgres: they create a scratch database per file, apply the
       # migrations and prove row-level security by connecting as an unprivileged role. Nothing here
@@ -25,6 +28,17 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U kern"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # The multi-instance suite starts two real services against one Valkey and proves a client on
+      # each converges on one document. Without this container it would skip, and a skipped
+      # multi-instance test is how a service that only works on one process ships as if it scaled.
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "valkey-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
