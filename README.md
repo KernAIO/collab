@@ -1,5 +1,5 @@
 <p align="center">
-<img src="https://raw.githubusercontent.com/KernAIO/kern/main/assets/kern-mark.svg" width="56" alt="">
+<img src="https://raw.githubusercontent.com/KernAIO/app/main/assets/kern-mark.svg" width="56" alt="">
 </p>
 
 # collab
@@ -8,12 +8,12 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/KernAIO/collab/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/KernAIO/collab/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square)](https://github.com/KernAIO/kern#what-works-today)
+[![Status](https://img.shields.io/badge/status-pre--1.0-orange?style=flat-square)](https://github.com/KernAIO/app#what-works-today)
 [![Last commit](https://img.shields.io/github/last-commit/KernAIO/collab?style=flat-square)](https://github.com/KernAIO/collab/commits/main)
 [![Website](https://img.shields.io/badge/kernaio.com-1f2328?style=flat-square)](https://kernaio.com)
 
 Two people typing in the same paragraph should both keep their words. This service is what makes
-that true in [Kern](https://github.com/KernAIO/kern): it merges everyone's edits, keeps the result,
+that true in [Kern](https://github.com/KernAIO/app): it merges everyone's edits, keeps the result,
 and hands it to whoever opens the document next.
 
 It owns no data of its own. It authenticates the editor against core. It asks whichever module owns
@@ -30,7 +30,7 @@ You need:
 - A Postgres 18 database.
 
 Most people should run the whole platform from the
-[umbrella repository](https://github.com/KernAIO/kern) instead. There, `pnpm setup && pnpm infra &&
+[umbrella repository](https://github.com/KernAIO/app) instead. There, `pnpm setup && pnpm infra &&
 pnpm dev` starts collab with everything it talks to.
 
 ### 1. Install and configure
@@ -81,7 +81,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md).
 
 [AGPL-3.0-only](LICENSE). This repository is part of the Kern product.
 The Kern framework you build modules against is Apache-2.0 — see
-[LICENSING.md](https://github.com/KernAIO/kern/blob/main/LICENSING.md).
+[LICENSING.md](https://github.com/KernAIO/app/blob/main/LICENSING.md).
 
 ---
 
