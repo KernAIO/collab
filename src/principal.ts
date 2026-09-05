@@ -25,6 +25,22 @@ export function createPrincipals(kernel: Kernel, ttlMs = 60_000): Principals {
 
   const fromToken = async (token: string): Promise<Principal> => {
     if (!token) return ANONYMOUS
+    /**
+     * An MCP token opens no document, ever.
+     *
+     * Core holds a `kmt_…` token to the `<module>:<read|write>` scopes its consent screen named,
+     * and it can only do that when the caller says what the token is being used for. There is no
+     * such thing here: a CRDT editing socket is not a module API call, it is not in the MCP tool
+     * catalogue — that is built from `/api/<module>/openapi.json`, which this service does not
+     * serve — and no consent screen has ever described it. So there is no need to state and nothing
+     * to check it against, and the honest answer is that the credential does not authenticate.
+     *
+     * It is refused here rather than left to core so that the refusal does not depend on which
+     * version of core answers. Until this existed, an MCP token handed to `onAuthenticate` came
+     * back from `core.users.principal` as its owner's full principal and could edit every document
+     * they could reach — and `/collab*` is routed here from the edge in every shipped Caddyfile.
+     */
+    if (token.startsWith('kmt_')) return ANONYMOUS
     const hit = cache.get(token)
     if (hit && hit.expires > Date.now()) return hit.principal
     const answer = await kernel
