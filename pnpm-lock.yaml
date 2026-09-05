@@ -15,8 +15,8 @@ importers:
         specifier: ^4.6.0
         version: 4.6.0(y-protocols@1.0.7(yjs@13.6.32))(yjs@13.6.32)
       '@kernhq/contracts':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@kernhq/kernel':
         specifier: ^0.10.0
         version: 0.10.0(@types/pg@8.23.1)(crossws@0.4.12)(ws@8.21.3)
@@ -454,6 +454,9 @@ packages:
 
   '@kernhq/contracts@0.7.0':
     resolution: {integrity: sha512-cp+dM+ScKi7hZ7hwsg+t9VpLoX8+oRnSfCydWJa6iQAtvjt+RBmgZNv67X9Du4b0I+AA24FpI6hyb2NTaMcLUw==}
+
+  '@kernhq/contracts@0.8.0':
+    resolution: {integrity: sha512-UcQE9tYnlrwahW7v3ilUvgJSaiLdrA6CaOfONGhUBqh2s7LStPUa9skeyfbGU6TWJPFhhlOi2nKp30HVpxnATg==}
 
   '@kernhq/kernel@0.10.0':
     resolution: {integrity: sha512-XjJU4JsYq54ASWd0KVdv3nOtM0Skf0iNENWpAFMgyYoVsA8CNqvT2Wr7Y4kl/j6HnZiw59ycjUdHSY+waSIs3w==}
@@ -2454,6 +2457,13 @@ snapshots:
   '@js-sdsl/ordered-map@4.4.2': {}
 
   '@kernhq/contracts@0.7.0':
+    dependencies:
+      '@orpc/contract': 1.15.0
+      zod: 4.5.4
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+
+  '@kernhq/contracts@0.8.0':
     dependencies:
       '@orpc/contract': 1.15.0
       zod: 4.5.4
