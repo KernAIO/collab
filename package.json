@@ -21,8 +21,8 @@
   "dependencies": {
     "@hocuspocus/extension-redis": "^4.6.0",
     "@hocuspocus/server": "^4.6.0",
-    "@kernhq/contracts": "^0.8.0",
-    "@kernhq/kernel": "^0.10.2",
+    "@kernhq/contracts": "^0.8.1",
+    "@kernhq/kernel": "^0.10.5",
     "dotenv": "^17.4.0",
     "drizzle-orm": "^0.45.0",
     "ioredis": "^5.6.1",
