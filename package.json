@@ -43,5 +43,11 @@
     "typescript": "~5.9.3",
     "vitest": "^4.0.0",
     "ws": "^8.21.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@kernhq/contracts": "$@kernhq/contracts",
+      "@kernhq/kernel": "$@kernhq/kernel"
+    }
   }
 }

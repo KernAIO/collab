@@ -4,6 +4,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@kernhq/contracts': ^0.8.0
+  '@kernhq/kernel': ^0.10.2
+
 importers:
 
   .:
